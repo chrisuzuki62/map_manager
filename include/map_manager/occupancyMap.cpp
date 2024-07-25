@@ -1,659 +1,503 @@
 /*
-	FILE: occupancyMap.cpp
-	--------------------------------------
-	function definition of occupancy map
+    FILE: occupancyMap.cpp
+    --------------------------------------
+    function definition of occupancy map
 */
-#include <map_manager/occupancyMap.h>
+#include "map_manager/occupancyMap.h"
 
-namespace mapManager{
-	occMap::occMap(){
-		this->ns_ = "occupancy_map";
-		this->hint_ = "[OccMap]";
-	}
+namespace mapManager {
+    occMap::occMap() : rclcpp::Node("occ_map_node") {
+        RCLCPP_INFO(this->get_logger(), "occMap node initialized");
+        // this->initMap(std::enable_shared_from_this<occMap>::shared_from_this());
+        // RCLCPP_INFO(this->get_logger(), "Initialization complete");
+    }
+    std::shared_ptr<mapManager::occMap> mapManager::occMap::create() {
+        auto instance = std::shared_ptr<occMap>(new occMap());
+        instance->initialize();
+        return instance;
+    }
+    void occMap::initialize() {
+        // Call initMap after the object is fully constructed
+        this->initMap();
+    }
 
-	occMap::occMap(const ros::NodeHandle& nh) : nh_(nh){
-		this->ns_ = "occupancy_map";
-		this->hint_ = "[OccMap]";
-		this->initParam();
-		this->initPrebuiltMap();
-		this->registerPub();
-		this->registerCallback();
-	}
+	// void occMap::initMap(const std::shared_ptr<rclcpp::Node>& node) {
+    void occMap::initMap() {
+        // Initialize the parameters, register callbacks, publishers, etc.
+        RCLCPP_INFO(this->get_logger(), "Initializing map...");
+        initParam();
+        registerCallback();
+        registerPub();
+        RCLCPP_INFO(this->get_logger(), "Publisher initialization complete");
+        startVisualization();
+        RCLCPP_INFO(this->get_logger(), "Map initialization complete");
+    }
 
-	void occMap::initMap(const ros::NodeHandle& nh){
-		this->nh_ = nh;
-		this->initParam();
-		this->initPrebuiltMap();
-		this->registerPub();
-		this->registerCallback();
-	}
+    void occMap::initParam() {
+        // sensor input mode
+        this->declare_parameter(this->ns_ + "sensor_input_mode", 0);
+        this->sensorInputMode_ = this->get_parameter(this->ns_ + "sensor_input_mode").as_int();
+        RCLCPP_INFO(this->get_logger(), "%s: Sensor input mode: depth image (0)/pointcloud (1). Your option: %d", this->hint_.c_str(), this->sensorInputMode_);
 
-	void occMap::initParam(){
-		// sensor input mode
-		if (not this->nh_.getParam(this->ns_ + "/sensor_input_mode", this->sensorInputMode_)){
-			this->sensorInputMode_ = 0;
-			cout << this->hint_ << ": No sensor input mode option. Use default: depth image" << endl;
-		}
-		else{
-			cout << this->hint_ << ": Sensor input mode: depth image (0)/pointcloud (1). Your option: " << this->sensorInputMode_ << endl;
-		}		
+        // localization mode
+        this->declare_parameter(this->ns_ + "localization_mode", 0);
+        this->localizationMode_ = this->get_parameter(this->ns_ + "localization_mode").as_int();
+        RCLCPP_INFO(this->get_logger(), "%s: Localization mode: pose (0)/odom (1). Your option: %d", this->hint_.c_str(), this->localizationMode_);
 
-		// localization mode
-		if (not this->nh_.getParam(this->ns_ + "/localization_mode", this->localizationMode_)){
-			this->localizationMode_ = 0;
-			cout << this->hint_ << ": No localization mode option. Use default: pose" << endl;
-		}
-		else{
-			cout << this->hint_ << ": Localizaiton mode: pose (0)/odom (1). Your option: " << this->localizationMode_ << endl;
-		}
+        // depth topic name
+        this->declare_parameter(this->ns_ + "depth_image_topic", "/camera/depth/image_raw");
+        this->depthTopicName_ = this->get_parameter(this->ns_ + "depth_image_topic").as_string();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth topic: %s", this->hint_.c_str(), this->depthTopicName_.c_str());
 
-		// depth topic name
-		if (not this->nh_.getParam(this->ns_ + "/depth_image_topic", this->depthTopicName_)){
-			this->depthTopicName_ = "/camera/depth/image_raw";
-			cout << this->hint_ << ": No depth image topic name. Use default: /camera/depth/image_raw" << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth topic: " << this->depthTopicName_ << endl;
-		}
+        // pointcloud topic name
+        this->declare_parameter(this->ns_ + "point_cloud_topic", "/camera/depth/points");
+        this->pointcloudTopicName_ = this->get_parameter(this->ns_ + "point_cloud_topic").as_string();
+        RCLCPP_INFO(this->get_logger(), "%s: Pointcloud topic: %s", this->hint_.c_str(), this->pointcloudTopicName_.c_str());
 
-		// pointcloud topic name
-		if (not this->nh_.getParam(this->ns_ + "/point_cloud_topic", this->pointcloudTopicName_)){
-			this->pointcloudTopicName_ = "/camera/depth/points";
-			cout << this->hint_ << ": No poincloud topic name. Use default: /camera/depth/points" << endl;
-		}
-		else{
-			cout << this->hint_ << ": Pointcloud topic: " << this->pointcloudTopicName_ << endl;
-		}
+        if (this->localizationMode_ == 0) {
+            // pose topic name
+            this->declare_parameter(this->ns_ + "pose_topic", "/CERLAB/quadcopter/pose");
+            this->poseTopicName_ = this->get_parameter(this->ns_ + "pose_topic").as_string();
+            RCLCPP_INFO(this->get_logger(), "%s: Pose topic: %s", this->hint_.c_str(), this->poseTopicName_.c_str());
+        }
 
-		if (this->localizationMode_ == 0){
-			// odom topic name
-			if (not this->nh_.getParam(this->ns_ + "/pose_topic", this->poseTopicName_)){
-				this->poseTopicName_ = "/CERLAB/quadcopter/pose";
-				cout << this->hint_ << ": No pose topic name. Use default: /CERLAB/quadcopter/pose" << endl;
-			}
-			else{
-				cout << this->hint_ << ": Pose topic: " << this->poseTopicName_ << endl;
-			}			
-		}
+        if (this->localizationMode_ == 1) {
+            // odom topic name
+            this->declare_parameter(this->ns_ + "odom_topic", "/CERLAB/quadcopter/odom");
+            this->odomTopicName_ = this->get_parameter(this->ns_ + "odom_topic").as_string();
+            RCLCPP_INFO(this->get_logger(), "%s: Odom topic: %s", this->hint_.c_str(), this->odomTopicName_.c_str());
+        }
 
-		if (this->localizationMode_ == 1){
-			// pose topic name
-			if (not this->nh_.getParam(this->ns_ + "/odom_topic", this->odomTopicName_)){
-				this->odomTopicName_ = "/CERLAB/quadcopter/odom";
-				cout << this->hint_ << ": No odom topic name. Use default: /CERLAB/quadcopter/odom" << endl;
-			}
-			else{
-				cout << this->hint_ << ": Odom topic: " << this->odomTopicName_ << endl;
-			}
-		}
+        std::vector<double> robotSizeVec = this->declare_parameter<std::vector<double>>(this->ns_ + "robot_size", {0.5, 0.5, 0.3});
+        this->robotSize_ = Eigen::Vector3d(robotSizeVec.data());
 
-		std::vector<double> robotSizeVec (3);
-		if (not this->nh_.getParam(this->ns_ + "/robot_size", robotSizeVec)){
-			robotSizeVec = std::vector<double>{0.5, 0.5, 0.3};
-		}
-		else{
-			cout << this->hint_ << ": robot size: " << "[" << robotSizeVec[0]  << ", " << robotSizeVec[1] << ", "<< robotSizeVec[2] << "]" << endl;
-		}
-		this->robotSize_(0) = robotSizeVec[0]; this->robotSize_(1) = robotSizeVec[1]; this->robotSize_(2) = robotSizeVec[2];
+        std::vector<double> depthIntrinsics = this->declare_parameter<std::vector<double>>(this->ns_ + "depth_intrinsics", {0.0, 0.0, 0.0, 0.0});
+        this->fx_ = depthIntrinsics[0];
+        this->fy_ = depthIntrinsics[1];
+        this->cx_ = depthIntrinsics[2];
+        this->cy_ = depthIntrinsics[3];
+        RCLCPP_INFO(this->get_logger(), "%s: fx, fy, cx, cy: [%f, %f, %f, %f]", this->hint_.c_str(), this->fx_, this->fy_, this->cx_, this->cy_);
 
-		std::vector<double> depthIntrinsics (4);
-		if (not this->nh_.getParam(this->ns_ + "/depth_intrinsics", depthIntrinsics)){
-			cout << this->hint_ << ": Please check camera intrinsics!" << endl;
-			exit(0);
-		}
-		else{
-			this->fx_ = depthIntrinsics[0];
-			this->fy_ = depthIntrinsics[1];
-			this->cx_ = depthIntrinsics[2];
-			this->cy_ = depthIntrinsics[3];
-			cout << this->hint_ << ": fx, fy, cx, cy: " << "["  << this->fx_ << ", " << this->fy_  << ", " << this->cx_ << ", "<< this->cy_ << "]" << endl;
-		}
+        // depth scale factor
+        this->declare_parameter(this->ns_ + "depth_scale_factor", 1000.0);
+        this->depthScale_ = this->get_parameter(this->ns_ + "depth_scale_factor").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth scale factor: %f", this->hint_.c_str(), this->depthScale_);
 
-		// depth scale factor
-		if (not this->nh_.getParam(this->ns_ + "/depth_scale_factor", this->depthScale_)){
-			this->depthScale_ = 1000.0;
-			cout << this->hint_ << ": No depth scale factor. Use default: 1000." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth scale factor: " << this->depthScale_ << endl;
-		}
+        // depth min value
+        this->declare_parameter(this->ns_ + "depth_min_value", 0.2);
+        this->depthMinValue_ = this->get_parameter(this->ns_ + "depth_min_value").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth min value: %f", this->hint_.c_str(), this->depthMinValue_);
 
-		// depth min value
-		if (not this->nh_.getParam(this->ns_ + "/depth_min_value", this->depthMinValue_)){
-			this->depthMinValue_ = 0.2;
-			cout << this->hint_ << ": No depth min value. Use default: 0.2 m." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth min value: " << this->depthMinValue_ << endl;
-		}
+        // depth max value
+        this->declare_parameter(this->ns_ + "depth_max_value", 5.0);
+        this->depthMaxValue_ = this->get_parameter(this->ns_ + "depth_max_value").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth max value: %f", this->hint_.c_str(), this->depthMaxValue_);
 
-		// depth max value
-		if (not this->nh_.getParam(this->ns_ + "/depth_max_value", this->depthMaxValue_)){
-			this->depthMaxValue_ = 5.0;
-			cout << this->hint_ << ": No depth max value. Use default: 5.0 m." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth depth max value: " << this->depthMaxValue_ << endl;
-		}
+        // depth filter margin
+        this->declare_parameter(this->ns_ + "depth_filter_margin", 0);
+        this->depthFilterMargin_ = this->get_parameter(this->ns_ + "depth_filter_margin").as_int();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth filter margin: %d", this->hint_.c_str(), this->depthFilterMargin_);
 
-		// depth filter margin
-		if (not this->nh_.getParam(this->ns_ + "/depth_filter_margin", this->depthFilterMargin_)){
-			this->depthFilterMargin_ = 0;
-			cout << this->hint_ << ": No depth filter margin. Use default: 0." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth filter margin: " << this->depthFilterMargin_ << endl;
-		}
+        // depth skip pixel
+        this->declare_parameter(this->ns_ + "depth_skip_pixel", 1);
+        this->skipPixel_ = this->get_parameter(this->ns_ + "depth_skip_pixel").as_int();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth skip pixel: %d", this->hint_.c_str(), this->skipPixel_);
 
-		// depth skip pixel
-		if (not this->nh_.getParam(this->ns_ + "/depth_skip_pixel", this->skipPixel_)){
-			this->skipPixel_ = 1;
-			cout << this->hint_ << ": No depth skip pixel. Use default: 1." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth skip pixel: " << this->skipPixel_ << endl;
-		}
+        // depth image columns
+        this->declare_parameter(this->ns_ + "image_cols", 640);
+        this->imgCols_ = this->get_parameter(this->ns_ + "image_cols").as_int();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth image columns: %d", this->hint_.c_str(), this->imgCols_);
 
-		// ------------------------------------------------------------------------------------
-		// depth image columns
-		if (not this->nh_.getParam(this->ns_ + "/image_cols", this->imgCols_)){
-			this->imgCols_ = 640;
-			cout << this->hint_ << ": No depth image columns. Use default: 640." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth image columns: " << this->imgCols_ << endl;
-		}
+        // depth image rows
+        this->declare_parameter(this->ns_ + "image_rows", 480);
+        this->imgRows_ = this->get_parameter(this->ns_ + "image_rows").as_int();
+        RCLCPP_INFO(this->get_logger(), "%s: Depth image rows: %d", this->hint_.c_str(), this->imgRows_);
+        this->projPoints_.resize(this->imgCols_ * this->imgRows_ / (this->skipPixel_ * this->skipPixel_));
 
-		// depth skip pixel
-		if (not this->nh_.getParam(this->ns_ + "/image_rows", this->imgRows_)){
-			this->imgRows_ = 480;
-			cout << this->hint_ << ": No depth image rows. Use default: 480." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Depth image rows: " << this->imgRows_ << endl;
-		}
-		this->projPoints_.resize(this->imgCols_ * this->imgRows_ / (this->skipPixel_ * this->skipPixel_));
-		// ------------------------------------------------------------------------------------
+        // transform matrix: body to camera
+        std::vector<double> body2CamVec = this->declare_parameter<std::vector<double>>(this->ns_ + "body_to_camera", std::vector<double>(16, 0.0));
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                this->body2Cam_(i, j) = body2CamVec[i * 4 + j];
+            }
+        }
 
+        // Raycast max length
+        this->declare_parameter(this->ns_ + "raycast_max_length", 5.0);
+        this->raycastMaxLength_ = this->get_parameter(this->ns_ + "raycast_max_length").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Raycast max length: %f", this->hint_.c_str(), this->raycastMaxLength_);
 
-		// transform matrix: body to camera
-		std::vector<double> body2CamVec (16);
-		if (not this->nh_.getParam(this->ns_ + "/body_to_camera", body2CamVec)){
-			ROS_ERROR("[OccMap]: Please check body to camera matrix!");
-		}
-		else{
-			for (int i=0; i<4; ++i){
-				for (int j=0; j<4; ++j){
-					this->body2Cam_(i, j) = body2CamVec[i * 4 + j];
-				}
-			}
-			// cout << this->hint_ << ": from body to camera: " << endl;
-			// cout << this->body2Cam_ << endl;
-		}
+        // p hit
+        double pHit = this->declare_parameter(this->ns_ + "p_hit", 0.70);
+        this->pHitLog_ = this->logit(pHit);
+        RCLCPP_INFO(this->get_logger(), "%s: P hit: %f", this->hint_.c_str(), pHit);
 
-		// Raycast max length
-		if (not this->nh_.getParam(this->ns_ + "/raycast_max_length", this->raycastMaxLength_)){
-			this->raycastMaxLength_ = 5.0;
-			cout << this->hint_ << ": No raycast max length. Use default: 5.0." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Raycast max length: " << this->raycastMaxLength_ << endl;
-		}
+        // p miss
+        double pMiss = this->declare_parameter(this->ns_ + "p_miss", 0.35);
+        this->pMissLog_ = this->logit(pMiss);
+        RCLCPP_INFO(this->get_logger(), "%s: P miss: %f", this->hint_.c_str(), pMiss);
 
-		// p hit
-		double pHit;
-		if (not this->nh_.getParam(this->ns_ + "/p_hit", pHit)){
-			pHit = 0.70;
-			cout << this->hint_ << ": No p hit. Use default: 0.70." << endl;
-		}
-		else{
-			cout << this->hint_ << ": P hit: " << pHit << endl;
-		}
-		this->pHitLog_ = this->logit(pHit);
+        // p min
+        double pMin = this->declare_parameter(this->ns_ + "p_min", 0.12);
+        this->pMinLog_ = this->logit(pMin);
+        RCLCPP_INFO(this->get_logger(), "%s: P min: %f", this->hint_.c_str(), pMin);
 
-		// p miss
-		double pMiss;
-		if (not this->nh_.getParam(this->ns_ + "/p_miss", pMiss)){
-			pMiss = 0.35;
-			cout << this->hint_ << ": No p miss. Use default: 0.35." << endl;
-		}
-		else{
-			cout << this->hint_ << ": P miss: " << pMiss << endl;
-		}
-		this->pMissLog_ = this->logit(pMiss);
+        // p max
+        double pMax = this->declare_parameter(this->ns_ + "p_max", 0.97);
+        this->pMaxLog_ = this->logit(pMax);
+        RCLCPP_INFO(this->get_logger(), "%s: P max: %f", this->hint_.c_str(), pMax);
 
-		// p min
-		double pMin;
-		if (not this->nh_.getParam(this->ns_ + "/p_min", pMin)){
-			pHit = 0.12;
-			cout << this->hint_ << ": No p min. Use default: 0.12." << endl;
-		}
-		else{
-			cout << this->hint_ << ": P min: " << pMin << endl;
-		}
-		this->pMinLog_ = this->logit(pMin);
+        // p occ
+        double pOcc = this->declare_parameter(this->ns_ + "p_occ", 0.80);
+        this->pOccLog_ = this->logit(pOcc);
+        RCLCPP_INFO(this->get_logger(), "%s: P occ: %f", this->hint_.c_str(), pOcc);
 
-		// p max
-		double pMax;
-		if (not this->nh_.getParam(this->ns_ + "/p_max", pMax)){
-			pMax = 0.97;
-			cout << this->hint_ << ": No p max. Use default: 0.97." << endl;
-		}
-		else{
-			cout << this->hint_ << ": P max: " << pMax << endl;
-		}
-		this->pMaxLog_ = this->logit(pMax);
+        // map resolution
+        this->declare_parameter(this->ns_ + "map_resolution", 0.1);
+        this->mapRes_ = this->get_parameter(this->ns_ + "map_resolution").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Map resolution: %f", this->hint_.c_str(), this->mapRes_);
 
-		// p occ
-		double pOcc;
-		if (not this->nh_.getParam(this->ns_ + "/p_occ", pOcc)){
-			pOcc = 0.80;
-			cout << this->hint_ << ": No p occ. Use default: 0.80." << endl;
-		}
-		else{
-			cout << this->hint_ << ": P occ: " << pOcc << endl;
-		}
-		this->pOccLog_ = this->logit(pOcc);
+        // ground height
+        this->declare_parameter(this->ns_ + "ground_height", 0.0);
+        this->groundHeight_ = this->get_parameter(this->ns_ + "ground_height").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Ground height: %f", this->hint_.c_str(), this->groundHeight_);
 
+        // map size
+        std::vector<double> mapSizeVec(3, 0.0);
+        this->declare_parameter<std::vector<double>>("map_size", std::vector<double>{20.0, 20.0, 3.0});
+        if (!this->get_parameter("map_size", mapSizeVec)) {
+            mapSizeVec = {20.0, 20.0, 3.0};
+            RCLCPP_WARN(this->get_logger(), "%s: No map size. Use default: [20, 20, 3].", this->hint_.c_str());
+        } else {
 
-		// map resolution
-		if (not this->nh_.getParam(this->ns_ + "/map_resolution", this->mapRes_)){
-			this->mapRes_ = 0.1;
-			cout << this->hint_ << ": No map resolution. Use default: 0.1." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Map resolution: " << this->mapRes_ << endl;
-		}
+            this->mapSize_(0) = mapSizeVec[0];
+            this->mapSize_(1) = mapSizeVec[1];
+            this->mapSize_(2) = mapSizeVec[2];
 
-		// ground height
-		if (not this->nh_.getParam(this->ns_ + "/ground_height", this->groundHeight_)){
-			this->groundHeight_ = 0.0;
-			cout << this->hint_ << ": No ground height. Use default: 0.0." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Ground height: " << this->groundHeight_ << endl;
-		}
+            // Initialize min and max sizes
+            this->mapSizeMin_(0) = -mapSizeVec[0] / 2; 
+            this->mapSizeMax_(0) = mapSizeVec[0] / 2;
+            this->mapSizeMin_(1) = -mapSizeVec[1] / 2; 
+            this->mapSizeMax_(1) = mapSizeVec[1] / 2;
+            this->mapSizeMin_(2) = this->groundHeight_; 
+            this->mapSizeMax_(2) = this->groundHeight_ + mapSizeVec[2];
+            
+            // Min and max for voxels
+            this->mapVoxelMin_(0) = 0; 
+            this->mapVoxelMax_(0) = std::ceil(mapSizeVec[0] / this->mapRes_);
+            this->mapVoxelMin_(1) = 0; 
+            this->mapVoxelMax_(1) = std::ceil(mapSizeVec[1] / this->mapRes_);
+            this->mapVoxelMin_(2) = 0; 
+            this->mapVoxelMax_(2) = std::ceil(mapSizeVec[2] / this->mapRes_);
 
+            // Reserve vector sizes for variables
+            int reservedSize = this->mapVoxelMax_(0) * this->mapVoxelMax_(1) * this->mapVoxelMax_(2);
+            this->countHitMiss_.resize(reservedSize, 0);
+            this->countHit_.resize(reservedSize, 0);
+            this->occupancy_.resize(reservedSize, this->pMinLog_ - this->UNKNOWN_FLAG_);
+            this->occupancyInflated_.resize(reservedSize, false);
+            this->flagTraverse_.resize(reservedSize, -1);
+            this->flagRayend_.resize(reservedSize, -1);
 
-		// map size
-		std::vector<double> mapSizeVec (3);
-		if (not this->nh_.getParam(this->ns_ + "/map_size", mapSizeVec)){
-			mapSizeVec[0] = 20; mapSizeVec[1] = 20; mapSizeVec[2] = 3;
-			cout << this->hint_ << ": No map size. Use default: [20, 20, 3]." << endl;
-		}
-		else{
-			this->mapSize_(0) = mapSizeVec[0];
-			this->mapSize_(1) = mapSizeVec[1];
-			this->mapSize_(2) = mapSizeVec[2];
+            RCLCPP_INFO(this->get_logger(), "%s: Map size: [%f, %f, %f]", this->hint_.c_str(), mapSizeVec[0], mapSizeVec[1], mapSizeVec[2]);
+        }
 
-			// init min max
-			this->mapSizeMin_(0) = -mapSizeVec[0]/2; this->mapSizeMax_(0) = mapSizeVec[0]/2;
-			this->mapSizeMin_(1) = -mapSizeVec[1]/2; this->mapSizeMax_(1) = mapSizeVec[1]/2;
-			this->mapSizeMin_(2) = this->groundHeight_; this->mapSizeMax_(2) = this->groundHeight_ + mapSizeVec[2];
-			
-			// min max for voxel
-			this->mapVoxelMin_(0) = 0; this->mapVoxelMax_(0) = ceil(mapSizeVec[0]/this->mapRes_);
-			this->mapVoxelMin_(1) = 0; this->mapVoxelMax_(1) = ceil(mapSizeVec[1]/this->mapRes_);
-			this->mapVoxelMin_(2) = 0; this->mapVoxelMax_(2) = ceil(mapSizeVec[2]/this->mapRes_);
+        // local update range
+        std::vector<double> localUpdateRangeVec = this->declare_parameter<std::vector<double>>(this->ns_ + "local_update_range", {5.0, 5.0, 3.0});
+        this->localUpdateRange_ = Eigen::Vector3d(localUpdateRangeVec.data());
 
-			// reserve vector for variables
-			int reservedSize = this->mapVoxelMax_(0) * this->mapVoxelMax_(1) * this->mapVoxelMax_(2);
-			this->countHitMiss_.resize(reservedSize, 0);
-			this->countHit_.resize(reservedSize, 0);
-			this->occupancy_.resize(reservedSize, this->pMinLog_-this->UNKNOWN_FLAG_);
-			this->occupancyInflated_.resize(reservedSize, false);
-			this->flagTraverse_.resize(reservedSize, -1);
-			this->flagRayend_.resize(reservedSize, -1);
+        // local bound inflate factor
+        this->declare_parameter(this->ns_ + "local_bound_inflation", 0.0);
+        this->localBoundInflate_ = this->get_parameter(this->ns_ + "local_bound_inflation").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Local bound inflate: %f", this->hint_.c_str(), this->localBoundInflate_);
 
-			cout << this->hint_ << ": Map size: " << "[" << mapSizeVec[0] << ", " << mapSizeVec[1] << ", " << mapSizeVec[2] << "]" << endl;
-		}
+        // whether to clean local map
+        this->declare_parameter(this->ns_ + "clean_local_map", true);
+        this->cleanLocalMap_ = this->get_parameter(this->ns_ + "clean_local_map").as_bool();
+        RCLCPP_INFO(this->get_logger(), "%s: Clean local map option is set to: %d", this->hint_.c_str(), this->cleanLocalMap_);
 
-		// local update range
-		std::vector<double> localUpdateRangeVec;
-		if (not this->nh_.getParam(this->ns_ + "/local_update_range", localUpdateRangeVec)){
-			localUpdateRangeVec = std::vector<double>{5.0, 5.0, 3.0};
-			cout << this->hint_ << ": No local update range. Use default: [5.0, 5.0, 3.0] m." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Local update range: " << "[" << localUpdateRangeVec[0] << ", " << localUpdateRangeVec[1] << ", " << localUpdateRangeVec[2] << "]" << endl;
-		}
-		this->localUpdateRange_(0) = localUpdateRangeVec[0]; this->localUpdateRange_(1) = localUpdateRangeVec[1]; this->localUpdateRange_(2) = localUpdateRangeVec[2];
+        // absolute dir of prebuilt map file (.pcd)
+        this->declare_parameter(this->ns_ + "prebuilt_map_directory", "");
+        this->prebuiltMapDir_ = this->get_parameter(this->ns_ + "prebuilt_map_directory").as_string();
+        RCLCPP_INFO(this->get_logger(), "%s: The prebuilt map absolute dir is found: %s", this->hint_.c_str(), this->prebuiltMapDir_.c_str());
 
+        // local map size (visualization)
+        std::vector<double> localMapSizeVec = this->declare_parameter<std::vector<double>>(this->ns_ + "local_map_size", {10.0, 10.0, 2.0});
+        this->localMapSize_ = Eigen::Vector3d(localMapSizeVec.data());
 
-		// local bound inflate factor
-		if (not this->nh_.getParam(this->ns_ + "/local_bound_inflation", this->localBoundInflate_)){
-			this->localBoundInflate_ = 0.0;
-			cout << this->hint_ << ": No local bound inflate. Use default: 0.0 m." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Local bound inflate: " << this->localBoundInflate_ << endl;
-		}
+        // max vis height
+        this->declare_parameter(this->ns_ + "max_height_visualization", 3.0);
+        this->maxVisHeight_ = this->get_parameter(this->ns_ + "max_height_visualization").as_double();
+        RCLCPP_INFO(this->get_logger(), "%s: Max visualization height: %f", this->hint_.c_str(), this->maxVisHeight_);
 
-		// whether to clean local map
-		if (not this->nh_.getParam(this->ns_ + "/clean_local_map", this->cleanLocalMap_)){
-			this->cleanLocalMap_ = true;
-			cout << this->hint_ << ": No clean local map option. Use default: true." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Clean local map option is set to: " << this->cleanLocalMap_ << endl; 
-		}
+        // visualize global map
+        this->declare_parameter(this->ns_ + "visualize_global_map", false);
+        this->visGlobalMap_ = this->get_parameter(this->ns_ + "visualize_global_map").as_bool();
+        RCLCPP_INFO(this->get_logger(), "%s: Visualize map option. local (0)/global (1): %d", this->hint_.c_str(), this->visGlobalMap_);
 
-		// absolute dir of prebuilt map file (.pcd)
-		if (not this->nh_.getParam(this->ns_ + "/prebuilt_map_directory", this->prebuiltMapDir_)){
-			this->prebuiltMapDir_ = "";
-			cout << this->hint_ << ": Not using prebuilt map." << endl;
-		}
-		else{
-			cout << this->hint_ << ": the prebuilt map absolute dir is found: " << this->prebuiltMapDir_ << endl;
-		}
+        // verbose
+        this->declare_parameter(this->ns_ + "verbose", true);
+        this->verbose_ = this->get_parameter(this->ns_ + "verbose").as_bool();
+        RCLCPP_INFO(this->get_logger(), "%s: Display messages", this->hint_.c_str());
+    }
 
-		// local map size (visualization)
-		std::vector<double> localMapSizeVec;
-		if (not this->nh_.getParam(this->ns_ + "/local_map_size", localMapSizeVec)){
-			localMapSizeVec = std::vector<double>{10.0, 10.0, 2.0};
-			cout << this->hint_ << ": No local map size. Use default: [10.0, 10.0, 3.0] m." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Local map size: " << "[" << localMapSizeVec[0] << ", " << localMapSizeVec[1] << ", " << localMapSizeVec[2] << "]" << endl;
-		}
-		this->localMapSize_(0) = localMapSizeVec[0]/2; this->localMapSize_(1) = localMapSizeVec[1]/2; this->localMapSize_(2) = localMapSizeVec[2]/2;
-		this->localMapVoxel_(0) = int(ceil(localMapSizeVec[0]/(2*this->mapRes_))); this->localMapVoxel_(1) = int(ceil(localMapSizeVec[1]/(2*this->mapRes_))); this->localMapVoxel_(2) = int(ceil(localMapSizeVec[2]/(2*this->mapRes_)));
+    void occMap::initPrebuiltMap() {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
-		// max vis height
-		if (not this->nh_.getParam(this->ns_ + "/max_height_visualization", this->maxVisHeight_)){
-			this->maxVisHeight_ = 3.0;
-			cout << this->hint_ << ": No max visualization height. Use default: 3.0 m." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Max visualization height: " << this->maxVisHeight_ << endl;
-		}
+        if (pcl::io::loadPCDFile<pcl::PointXYZ>(this->prebuiltMapDir_, *cloud) == -1) //* load the file
+        {
+            RCLCPP_INFO(this->get_logger(), "%s: No prebuilt map found/not using the prebuilt map.", this->hint_.c_str());
+        } else {
+            RCLCPP_INFO(this->get_logger(), "%s: Map loaded with %lu data points.", this->hint_.c_str(), cloud->width * cloud->height);
+            int address;
+            Eigen::Vector3i pointIndex;
+            Eigen::Vector3d pointPos;
+            Eigen::Vector3i inflateIndex;
+            int inflateAddress;
 
-		// visualize global map
-		if (not this->nh_.getParam(this->ns_ + "/visualize_global_map", this->visGlobalMap_)){
-			this->visGlobalMap_ = false;
-			cout << this->hint_ << ": No visualize map option. Use default: visualize local map." << endl;
-		}
-		else{
-			cout << this->hint_ << ": Visualize map option. local (0)/global (1): " << this->visGlobalMap_ << endl;
-		}
+            // update occupancy info
+            int xInflateSize = ceil(this->robotSize_(0) / (2 * this->mapRes_));
+            int yInflateSize = ceil(this->robotSize_(1) / (2 * this->mapRes_));
+            int zInflateSize = ceil(this->robotSize_(2) / (2 * this->mapRes_));
 
-		// verbose
-		if (not this->nh_.getParam(this->ns_ + "/verbose", this->verbose_)){
-			this->verbose_ = true;
-			cout << this->hint_ << ": No verbose option. Use default: check update info." << endl;
-		}
-		else{
-			if (not this->verbose_){
-				cout << this->hint_ << ": Not display messages" << endl;
-			}
-			else{
-				cout << this->hint_ << ": Display messages" << endl;
-			}
-		}
+            Eigen::Vector3d currMapRangeMin(0.0, 0.0, 0.0);
+            Eigen::Vector3d currMapRangeMax(0.0, 0.0, 0.0);
 
+            const int maxIndex = this->mapVoxelMax_(0) * this->mapVoxelMax_(1) * this->mapVoxelMax_(2);
+            for (const auto& point : *cloud) {
+                address = this->posToAddress(point.x, point.y, point.z);
+                pointPos(0) = point.x;
+                pointPos(1) = point.y;
+                pointPos(2) = point.z;
+                this->posToIndex(pointPos, pointIndex);
 
-	}
+                this->occupancy_[address] = this->pMaxLog_;
+                // update map range
+                if (pointPos(0) < currMapRangeMin(0)) {
+                    currMapRangeMin(0) = pointPos(0);
+                }
 
-	void occMap::initPrebuiltMap(){
-		pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
+                if (pointPos(0) > currMapRangeMax(0)) {
+                    currMapRangeMax(0) = pointPos(0);
+                }
 
-		if (pcl::io::loadPCDFile<pcl::PointXYZ> (this->prebuiltMapDir_, *cloud) == -1) //* load the file
-		{
-			cout << this->hint_ << ": No prebuilt map found/not using the prebuilt map." << endl;
-		}
-		else {
-			cout << this->hint_ << ": Map loaded with " << cloud->width * cloud->height << " data points. " << endl;
-			int address;
-			Eigen::Vector3i pointIndex;
-			Eigen::Vector3d pointPos;
-			Eigen::Vector3i inflateIndex;
-			int inflateAddress;
+                if (pointPos(1) < currMapRangeMin(1)) {
+                    currMapRangeMin(1) = pointPos(1);
+                }
 
-			// update occupancy info
-			int xInflateSize = ceil(this->robotSize_(0)/(2*this->mapRes_));
-			int yInflateSize = ceil(this->robotSize_(1)/(2*this->mapRes_));
-			int zInflateSize = ceil(this->robotSize_(2)/(2*this->mapRes_));
+                if (pointPos(1) > currMapRangeMax(1)) {
+                    currMapRangeMax(1) = pointPos(1);
+                }
 
-			Eigen::Vector3d currMapRangeMin (0.0, 0.0, 0.0);
-			Eigen::Vector3d currMapRangeMax (0.0, 0.0, 0.0);
+                if (pointPos(2) < currMapRangeMin(2)) {
+                    currMapRangeMin(2) = pointPos(2);
+                }
 
-			const int  maxIndex = this->mapVoxelMax_(0) * this->mapVoxelMax_(1) * this->mapVoxelMax_(2);
-			for (const auto& point: *cloud)
-			{
-				address = this->posToAddress(point.x, point.y, point.z);
-				pointPos(0) = point.x; pointPos(1) = point.y; pointPos(2) = point.z;
-				this->posToIndex(pointPos, pointIndex);
+                if (pointPos(2) > currMapRangeMax(2)) {
+                    currMapRangeMax(2) = pointPos(2);
+                }
 
-				this->occupancy_[address] = this->pMaxLog_;
-				// update map range
-				if (pointPos(0) < currMapRangeMin(0)){
-					currMapRangeMin(0) = pointPos(0);
-				}
+                for (int ix = -xInflateSize; ix <= xInflateSize; ++ix) {
+                    for (int iy = -yInflateSize; iy <= yInflateSize; ++iy) {
+                        for (int iz = -zInflateSize; iz <= zInflateSize; ++iz) {
+                            inflateIndex(0) = pointIndex(0) + ix;
+                            inflateIndex(1) = pointIndex(1) + iy;
+                            inflateIndex(2) = pointIndex(2) + iz;
+                            inflateAddress = this->indexToAddress(inflateIndex);
+                            if ((inflateAddress < 0) or (inflateAddress > maxIndex)) {
+                                continue; // those points are not in the reserved map
+                            }
+                            this->occupancyInflated_[inflateAddress] = true;
+                        }
+                    }
+                }
+            }
+            this->currMapRangeMin_ = currMapRangeMin;
+            this->currMapRangeMax_ = currMapRangeMax;
+        }
+    }
 
-				if (pointPos(0) > currMapRangeMax(0)){
-					currMapRangeMax(0) = pointPos(0);
-				}
-
-				if (pointPos(1) < currMapRangeMin(1)){
-					currMapRangeMin(1) = pointPos(1);
-				}
-
-				if (pointPos(1) > currMapRangeMax(1)){
-					currMapRangeMax(1) = pointPos(1);
-				}
-
-				if (pointPos(2) < currMapRangeMin(2)){
-					currMapRangeMin(2) = pointPos(2);
-				}
-
-				if (pointPos(2) > currMapRangeMax(2)){
-					currMapRangeMax(2) = pointPos(2);
-				}
-
-				for (int ix=-xInflateSize; ix<=xInflateSize; ++ix){
-					for (int iy=-yInflateSize; iy<=yInflateSize; ++iy){
-						for (int iz=-zInflateSize; iz<=zInflateSize; ++iz){
-							inflateIndex(0) = pointIndex(0) + ix;
-							inflateIndex(1) = pointIndex(1) + iy;
-							inflateIndex(2) = pointIndex(2) + iz;
-							inflateAddress = this->indexToAddress(inflateIndex);
-							if ((inflateAddress < 0) or (inflateAddress > maxIndex)){
-								continue; // those points are not in the reserved map
-							} 
-							this->occupancyInflated_[inflateAddress] = true;
-						}
-					}
-				}
-			}
-			this->currMapRangeMin_ = currMapRangeMin;
-			this->currMapRangeMax_ = currMapRangeMax;
-		}
-	}
-
-	void occMap::registerCallback(){
-		if (this->sensorInputMode_ == 0){
+	void occMap::registerCallback() {
+		// auto self_shared = std::enable_shared_from_this<mapManager::occMap>::shared_from_this();
+		if (this->sensorInputMode_ == 0) {
 			// depth pose callback
-			this->depthSub_.reset(new message_filters::Subscriber<sensor_msgs::Image>(this->nh_, this->depthTopicName_, 50));
-			if (this->localizationMode_ == 0){
-				this->poseSub_.reset(new message_filters::Subscriber<geometry_msgs::PoseStamped>(this->nh_, this->poseTopicName_, 25));
-				this->depthPoseSync_.reset(new message_filters::Synchronizer<depthPoseSync>(depthPoseSync(100), *this->depthSub_, *this->poseSub_));
-				this->depthPoseSync_->registerCallback(boost::bind(&occMap::depthPoseCB, this, _1, _2));
-			}
-			else if (this->localizationMode_ == 1){
-				this->odomSub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(this->nh_, this->odomTopicName_, 25));
-				this->depthOdomSync_.reset(new message_filters::Synchronizer<depthOdomSync>(depthOdomSync(100), *this->depthSub_, *this->odomSub_));
-				this->depthOdomSync_->registerCallback(boost::bind(&occMap::depthOdomCB, this, _1, _2));
-			}
-			else{
-				ROS_ERROR("[OccMap]: Invalid localization mode!");
+			// this->depthSub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(self_shared, this->depthTopicName_, rmw_qos_profile_default);
+            this->depthSub_.subscribe(this, this->depthTopicName_, rmw_qos_profile_default);
+			if (this->localizationMode_ == 0) {
+				// this->poseSub_ = std::make_shared<message_filters::Subscriber<geometry_msgs::msg::PoseStamped>>(self_shared, this->poseTopicName_, rmw_qos_profile_default);
+                this->poseSub_.subscribe(this, this->poseTopicName_, rmw_qos_profile_default);
+				this->depthPoseSync_ = std::make_shared<message_filters::Synchronizer<depthPoseSyncPolicy>>(depthPoseSyncPolicy(100), this->depthSub_, this->poseSub_);
+				this->depthPoseSync_->registerCallback(std::bind(&occMap::depthPoseCB, this, std::placeholders::_1, std::placeholders::_2));
+			} else if (this->localizationMode_ == 1) {
+				// this->odomSub_ = std::make_shared<message_filters::Subscriber<nav_msgs::msg::Odometry>>(self_shared, this->odomTopicName_, rmw_qos_profile_default);
+				this->odomSub_.subscribe(this, this->odomTopicName_, rmw_qos_profile_default);
+                this->depthOdomSync_ = std::make_shared<message_filters::Synchronizer<depthOdomSyncPolicy>>(depthOdomSyncPolicy(100), this->depthSub_, this->odomSub_);
+				this->depthOdomSync_->registerCallback(std::bind(&occMap::depthOdomCB, this, std::placeholders::_1, std::placeholders::_2));
+			} else {
+				RCLCPP_ERROR(this->get_logger(), "[OccMap]: Invalid localization mode!");
+				rclcpp::shutdown();
 				exit(0);
 			}
-		}
-		else if (this->sensorInputMode_ == 1){
+		} else if (this->sensorInputMode_ == 1) {
 			// pointcloud callback
-			this->pointcloudSub_.reset(new message_filters::Subscriber<sensor_msgs::PointCloud2>(this->nh_, this->pointcloudTopicName_, 50));
-			if (this->localizationMode_ == 0){
-				this->poseSub_.reset(new message_filters::Subscriber<geometry_msgs::PoseStamped>(this->nh_, this->poseTopicName_, 25));
-				this->pointcloudPoseSync_.reset(new message_filters::Synchronizer<pointcloudPoseSync>(pointcloudPoseSync(100), *this->pointcloudSub_, *this->poseSub_));
-				this->pointcloudPoseSync_->registerCallback(boost::bind(&occMap::pointcloudPoseCB, this, _1, _2));
-			}
-			else if (this->localizationMode_ == 1){
-				this->odomSub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(this->nh_, this->odomTopicName_, 25));
-				this->pointcloudOdomSync_.reset(new message_filters::Synchronizer<pointcloudOdomSync>(pointcloudOdomSync(100), *this->pointcloudSub_, *this->odomSub_));
-				this->pointcloudOdomSync_->registerCallback(boost::bind(&occMap::pointcloudOdomCB, this, _1, _2));
-			}
-			else{
-				ROS_ERROR("[OccMap]: Invalid localization mode!");
+			// this->pointcloudSub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::PointCloud2>>(self_shared, this->pointcloudTopicName_, rmw_qos_profile_default);
+			this->pointcloudSub_.subscribe(this, this->pointcloudTopicName_, rmw_qos_profile_default);
+            if (this->localizationMode_ == 0) {
+				// this->poseSub_ = std::make_shared<message_filters::Subscriber<geometry_msgs::msg::PoseStamped>>(self_shared, this->poseTopicName_, rmw_qos_profile_default);
+				this->poseSub_.subscribe(this, this->poseTopicName_, rmw_qos_profile_default);
+                this->pointcloudPoseSync_ = std::make_shared<message_filters::Synchronizer<pointcloudPoseSyncPolicy>>(pointcloudPoseSyncPolicy(100), this->pointcloudSub_, this->poseSub_);
+				this->pointcloudPoseSync_->registerCallback(std::bind(&occMap::pointcloudPoseCB, this, std::placeholders::_1, std::placeholders::_2));
+			} else if (this->localizationMode_ == 1) {
+				// this->odomSub_ = std::make_shared<message_filters::Subscriber<nav_msgs::msg::Odometry>>(self_shared, this->odomTopicName_, rmw_qos_profile_default);
+				this->odomSub_.subscribe(this, this->odomTopicName_, rmw_qos_profile_default);
+                this->pointcloudOdomSync_ = std::make_shared<message_filters::Synchronizer<pointcloudOdomSyncPolicy>>(pointcloudOdomSyncPolicy(100), this->pointcloudSub_, this->odomSub_);
+				this->pointcloudOdomSync_->registerCallback(std::bind(&occMap::pointcloudOdomCB, this, std::placeholders::_1, std::placeholders::_2));
+			} else {
+				RCLCPP_ERROR(this->get_logger(), "[OccMap]: Invalid localization mode!");
+				rclcpp::shutdown();
 				exit(0);
 			}
-		}
-		else{
-			ROS_ERROR("[OccMap]: Invalid sensor input mode!");
+		} else {
+			RCLCPP_ERROR(this->get_logger(), "[OccMap]: Invalid sensor input mode!");
+			rclcpp::shutdown();
 			exit(0);
 		}
-
-		// occupancy update callback
-		this->occTimer_ = this->nh_.createTimer(ros::Duration(0.05), &occMap::updateOccupancyCB, this);
+        this->occTimer_ = this->create_wall_timer(std::chrono::milliseconds(50), std::bind(&occMap::updateOccupancyCB, this));
 
 		// map inflation callback
-		this->inflateTimer_ = this->nh_.createTimer(ros::Duration(0.05), &occMap::inflateMapCB, this);
+		this->inflateTimer_ = this->create_wall_timer(std::chrono::milliseconds(50), std::bind(&occMap::inflateMapCB, this));
 
-		// visualization callback
-		this->visTimer_ = this->nh_.createTimer(ros::Duration(0.1), &occMap::visCB, this);
+        this->visTimer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&occMap::visCB, this));
 		this->visWorker_ = std::thread(&occMap::startVisualization, this);
-		this->visWorker_.detach();
-		// this->projPointsVisTimer_ = this->nh_.createTimer(ros::Duration(0.1), &occMap::projPointsVisCB, this);
-		// this->mapVisTimer_ = this->nh_.createTimer(ros::Duration(0.15), &occMap::mapVisCB, this);
-		// this->inflatedMapVisTimer_ = this->nh_.createTimer(ros::Duration(0.15), &occMap::inflatedMapVisCB, this);
-		// this->map2DVisTimer_ = this->nh_.createTimer(ros::Duration(0.15), &occMap::map2DVisCB, this);
+		// this->visWorker_.detach();
 	}
 
-	void occMap::registerPub(){
-		this->depthCloudPub_ = this->nh_.advertise<sensor_msgs::PointCloud2>(this->ns_ + "/depth_cloud", 10);
-		this->mapVisPub_ = this->nh_.advertise<sensor_msgs::PointCloud2>(this->ns_ + "/voxel_map", 10);
-		this->inflatedMapVisPub_ = this->nh_.advertise<sensor_msgs::PointCloud2>(this->ns_ + "/inflated_voxel_map", 10);
-		this->map2DPub_ = this->nh_.advertise<nav_msgs::OccupancyGrid>(this->ns_ + "/2D_occupancy_map", 10);
-		this->mapExploredPub_ = this->nh_.advertise<sensor_msgs::PointCloud2>(this->ns_+"/explored_voxel_map",10);
-		// publish service
-		this->collisionCheckServer_ = this->nh_.advertiseService(this->ns_ + "/check_pos_collision", &occMap::checkCollision, this);
-	}
-
-	bool occMap::checkCollision(map_manager::CheckPosCollision::Request& req, map_manager::CheckPosCollision::Response& res){
-		if (req.inflated){
-			res.occupied = this->isInflatedOccupied(Eigen::Vector3d (req.x, req.y, req.z));
-		}
-		else{
-			res.occupied = this->isOccupied(Eigen::Vector3d (req.x, req.y, req.z));
-		}
-
-		return true;
-	}
-
-	void occMap::depthPoseCB(const sensor_msgs::ImageConstPtr& img, const geometry_msgs::PoseStampedConstPtr& pose){
-		// store current depth image
-		cv_bridge::CvImagePtr imgPtr = cv_bridge::toCvCopy(img, img->encoding);
-		if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1){
-			(imgPtr->image).convertTo(imgPtr->image, CV_16UC1, this->depthScale_);
-		}
-		imgPtr->image.copyTo(this->depthImage_);
-
-		// store current position and orientation (camera)
-		Eigen::Matrix4d camPoseMatrix;
-		this->getCameraPose(pose, camPoseMatrix);
-
-		this->position_(0) = camPoseMatrix(0, 3);
-		this->position_(1) = camPoseMatrix(1, 3);
-		this->position_(2) = camPoseMatrix(2, 3);
-		this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
-
-		if (this->isInMap(this->position_)){
-			this->occNeedUpdate_ = true;
-		}
-		else{
-			this->occNeedUpdate_ = false;
-		}
-	}
-
-	void occMap::depthOdomCB(const sensor_msgs::ImageConstPtr& img, const nav_msgs::OdometryConstPtr& odom){
-		// store current depth image
-		cv_bridge::CvImagePtr imgPtr = cv_bridge::toCvCopy(img, img->encoding);
-		if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1){
-			(imgPtr->image).convertTo(imgPtr->image, CV_16UC1, this->depthScale_);
-		}
-		imgPtr->image.copyTo(this->depthImage_);
-
-		// store current position and orientation (camera)
-		Eigen::Matrix4d camPoseMatrix;
-		this->getCameraPose(odom, camPoseMatrix);
-
-		this->position_(0) = camPoseMatrix(0, 3);
-		this->position_(1) = camPoseMatrix(1, 3);
-		this->position_(2) = camPoseMatrix(2, 3);
-		this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
-
-		if (this->isInMap(this->position_)){
-			this->occNeedUpdate_ = true;
-		}
-		else{
-			this->occNeedUpdate_ = false;
-		}
-	}
-
-	void occMap::pointcloudPoseCB(const sensor_msgs::PointCloud2ConstPtr& pointcloud, const geometry_msgs::PoseStampedConstPtr& pose){
-		// directly get the point cloud
-		pcl::PCLPointCloud2 pclPC2;
-		pcl_conversions::toPCL(*pointcloud, pclPC2); // convert ros pointcloud2 to pcl pointcloud2
-		pcl::fromPCLPointCloud2(pclPC2, this->pointcloud_);
-
-		// store current position and orientation (camera)
-		Eigen::Matrix4d camPoseMatrix;
-		this->getCameraPose(pose, camPoseMatrix);
-
-		this->position_(0) = camPoseMatrix(0, 3);
-		this->position_(1) = camPoseMatrix(1, 3);
-		this->position_(2) = camPoseMatrix(2, 3);
-		this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
-
-		if (this->isInMap(this->position_)){
-			this->occNeedUpdate_ = true;
-		}
-		else{
-			this->occNeedUpdate_ = false;
-		}
-	}
-
-	void occMap::pointcloudOdomCB(const sensor_msgs::PointCloud2ConstPtr& pointcloud, const nav_msgs::OdometryConstPtr& odom){
-		// directly get the point cloud
-		pcl::PCLPointCloud2 pclPC2;
-		pcl_conversions::toPCL(*pointcloud, pclPC2); // convert ros pointcloud2 to pcl pointcloud2
-		pcl::fromPCLPointCloud2(pclPC2, this->pointcloud_);
 
 
-		// store current position and orientation (camera)
-		Eigen::Matrix4d camPoseMatrix;
-		this->getCameraPose(odom, camPoseMatrix);
 
-		this->position_(0) = camPoseMatrix(0, 3);
-		this->position_(1) = camPoseMatrix(1, 3);
-		this->position_(2) = camPoseMatrix(2, 3);
-		this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
 
-		if (this->isInMap(this->position_)){
-			this->occNeedUpdate_ = true;
-		}
-		else{
-			this->occNeedUpdate_ = false;
-		}
-	}
+    void occMap::registerPub() {
+        this->depthCloudPub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(this->ns_ + "/depth_cloud", 10);
+        this->mapVisPub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(this->ns_ + "/voxel_map", 10);
+        this->inflatedMapVisPub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(this->ns_ + "/inflated_voxel_map", 10);
+        this->map2DPub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(this->ns_ + "/two_D_occupancy_map", 10);
+        this->mapExploredPub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(this->ns_ + "/explored_voxel_map", 10);
+        // publish service
+        this->collisionCheckServer_ = this->create_service<map_manager::srv::CheckPosCollision>(this->ns_ + "/check_pos_collision", std::bind(&occMap::checkCollision, this, std::placeholders::_1, std::placeholders::_2));
+    }
 
-	void occMap::updateOccupancyCB(const ros::TimerEvent& ){
-		if (not this->occNeedUpdate_){
+    bool occMap::checkCollision(const std::shared_ptr<map_manager::srv::CheckPosCollision::Request> req, std::shared_ptr<map_manager::srv::CheckPosCollision::Response> res) {
+        if (req->inflated) {
+            res->occupied = this->isInflatedOccupied(Eigen::Vector3d(req->x, req->y, req->z));
+        } else {
+            res->occupied = this->isOccupied(Eigen::Vector3d(req->x, req->y, req->z));
+        }
+
+        return true;
+    }
+
+    void occMap::depthPoseCB(const std::shared_ptr<const sensor_msgs::msg::Image> img, const std::shared_ptr<const geometry_msgs::msg::PoseStamped> pose) {
+        // store current depth image
+        cv_bridge::CvImagePtr imgPtr = cv_bridge::toCvCopy(img, img->encoding);
+        if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1) {
+            (imgPtr->image).convertTo(imgPtr->image, CV_16UC1, this->depthScale_);
+        }
+        imgPtr->image.copyTo(this->depthImage_);
+
+        // store current position and orientation (camera)
+        Eigen::Matrix4d camPoseMatrix;
+        this->getCameraPose(pose, camPoseMatrix);
+
+        this->position_(0) = camPoseMatrix(0, 3);
+        this->position_(1) = camPoseMatrix(1, 3);
+        this->position_(2) = camPoseMatrix(2, 3);
+        this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
+
+        if (this->isInMap(this->position_)) {
+            this->occNeedUpdate_ = true;
+        } else {
+            this->occNeedUpdate_ = false;
+        }
+    }
+
+    void occMap::depthOdomCB(const std::shared_ptr<const sensor_msgs::msg::Image> img, const std::shared_ptr<const nav_msgs::msg::Odometry> odom) {
+        // store current depth image
+        cv_bridge::CvImagePtr imgPtr = cv_bridge::toCvCopy(img, img->encoding);
+        if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1) {
+            (imgPtr->image).convertTo(imgPtr->image, CV_16UC1, this->depthScale_);
+        }
+        imgPtr->image.copyTo(this->depthImage_);
+
+        // store current position and orientation (camera)
+        Eigen::Matrix4d camPoseMatrix;
+        this->getCameraPose(odom, camPoseMatrix);
+
+        this->position_(0) = camPoseMatrix(0, 3);
+        this->position_(1) = camPoseMatrix(1, 3);
+        this->position_(2) = camPoseMatrix(2, 3);
+        this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
+
+        if (this->isInMap(this->position_)) {
+            this->occNeedUpdate_ = true;
+        } else {
+            this->occNeedUpdate_ = false;
+        }
+    }
+
+    void occMap::pointcloudPoseCB(const std::shared_ptr<const sensor_msgs::msg::PointCloud2> pointcloud, const std::shared_ptr<const geometry_msgs::msg::PoseStamped> pose) {
+        // directly get the point cloud
+        pcl::PCLPointCloud2 pclPC2;
+        pcl_conversions::toPCL(*pointcloud, pclPC2); // convert ros pointcloud2 to pcl pointcloud2
+        pcl::fromPCLPointCloud2(pclPC2, this->pointcloud_);
+
+        // store current position and orientation (camera)
+        Eigen::Matrix4d camPoseMatrix;
+        this->getCameraPose(pose, camPoseMatrix);
+
+        this->position_(0) = camPoseMatrix(0, 3);
+        this->position_(1) = camPoseMatrix(1, 3);
+        this->position_(2) = camPoseMatrix(2, 3);
+        this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
+
+        if (this->isInMap(this->position_)) {
+            this->occNeedUpdate_ = true;
+        } else {
+            this->occNeedUpdate_ = false;
+        }
+    }
+
+    void occMap::pointcloudOdomCB(const std::shared_ptr<const sensor_msgs::msg::PointCloud2> pointcloud, const std::shared_ptr<const nav_msgs::msg::Odometry> odom) {
+        // directly get the point cloud
+        cout<<"reading pc"<<endl;
+        pcl::PCLPointCloud2 pclPC2;
+        pcl_conversions::toPCL(*pointcloud, pclPC2); // convert ros pointcloud2 to pcl pointcloud2
+        pcl::fromPCLPointCloud2(pclPC2, this->pointcloud_);
+
+        // store current position and orientation (camera)
+        Eigen::Matrix4d camPoseMatrix;
+        this->getCameraPose(odom, camPoseMatrix);
+
+        this->position_(0) = camPoseMatrix(0, 3);
+        this->position_(1) = camPoseMatrix(1, 3);
+        this->position_(2) = camPoseMatrix(2, 3);
+        this->orientation_ = camPoseMatrix.block<3, 3>(0, 0);
+        // cout<< "In Map: " << this->isInMap(this->position_) << endl;
+        // cout<< "position x: " << this->position_(0)<< "position y: "<< this->position_(1)<< "position z: "<< this->position_(2) << endl;
+        if (this->isInMap(this->position_)) {
+            this->occNeedUpdate_ = true;
+        } else {
+            this->occNeedUpdate_ = false;
+        }
+    }
+
+void occMap::updateOccupancyCB() {
+        if (not this->occNeedUpdate_){
 			return;
 		}
-		// cout << "update occupancy map" << endl;
-		ros::Time startTime, endTime;
+		cout << "update occupancy map" << endl;
+		// ros::Time startTime, endTime;
 		
-		startTime = ros::Time::now();
+		// startTime = ros::Time::now();
 		if (this->sensorInputMode_ == 0){
 			// project 3D points from depth map
 			this->projectDepthImage();
@@ -674,16 +518,17 @@ namespace mapManager{
 		
 		// inflate map
 		// this->inflateLocalMap();
-		endTime = ros::Time::now();
+		// endTime = ros::Time::now();
 		if (this->verbose_){
-			cout << this->hint_ << ": Occupancy update time: " << (endTime - startTime).toSec() << " s." << endl;
+			// cout << this->hint_ << ": Occupancy update time: " << (endTime - startTime).toSec() << " s." << endl;
 		}
 		this->occNeedUpdate_ = false;
 		this->mapNeedInflate_ = true;
 	}
 
-	void occMap::inflateMapCB(const ros::TimerEvent& ){
-		// inflate local map:
+
+    void occMap::inflateMapCB() {
+        // inflate local map:
 		if (this->mapNeedInflate_){
 			this->inflateLocalMap();
 			this->mapNeedInflate_ = false;
@@ -691,9 +536,8 @@ namespace mapManager{
 		}
 	}
 
-
-	void occMap::projectDepthImage(){
-		this->projPointsNum_ = 0;
+    void occMap::projectDepthImage() {
+        this->projPointsNum_ = 0;
 
 		int cols = this->depthImage_.cols;
 		int rows = this->depthImage_.rows;
@@ -755,8 +599,8 @@ namespace mapManager{
 		} 
 	}
 
-	void occMap::getPointcloud(){
-		this->projPointsNum_ = this->pointcloud_.size();
+    void occMap::getPointcloud() {
+        this->projPointsNum_ = this->pointcloud_.size();
 		this->projPoints_.resize(this->projPointsNum_);
 		Eigen::Vector3d currPointCam, currPointMap;
 		for (int i=0; i<this->projPointsNum_; ++i){
@@ -770,8 +614,8 @@ namespace mapManager{
 		}
 	}
 
-	void occMap::raycastUpdate(){
-		if (this->projPointsNum_ == 0){
+    void occMap::raycastUpdate() {
+        if (this->projPointsNum_ == 0){
 			return;
 		}
 		this->raycastNum_ += 1;
@@ -938,8 +782,8 @@ namespace mapManager{
 
 	}
 
-	void occMap::cleanLocalMap(){
-		Eigen::Vector3i posIndex;
+    void occMap::cleanLocalMap() {
+        Eigen::Vector3i posIndex;
 		this->posToIndex(this->position_, posIndex);
 		Eigen::Vector3i innerMinBBX = posIndex - this->localMapVoxel_;
 		Eigen::Vector3i innerMaxBBX = posIndex + this->localMapVoxel_;
@@ -962,8 +806,7 @@ namespace mapManager{
 				}
 			}
 		}
-
-		// clear y axis
+        // clear y axis
 		for (int x=outerMinBBX(0); x<=outerMaxBBX(0); ++x){
 			for (int z=outerMinBBX(2); z<=outerMaxBBX(2); ++z){
 				for (int y=outerMinBBX(1); y<=innerMinBBX(1); ++y){
@@ -990,7 +833,7 @@ namespace mapManager{
 		}
 	}
 
-	void occMap::inflateLocalMap(){
+    void occMap::inflateLocalMap() {
 		int xmin = this->localBoundMin_(0);
 		int xmax = this->localBoundMax_(0);
 		int ymin = this->localBoundMin_(1);
@@ -1042,54 +885,25 @@ namespace mapManager{
 	}
 
 
+    void occMap::visCB() {
+        // cout<< "Vis CB" <<endl;
+        this->publishProjPoints();
+        // this->publishMap();
+        this->publishInflatedMap();
+        this->publish2DOccupancyGrid();
+    }
 
-	void occMap::visCB(const ros::TimerEvent& ){
-		// this->publishProjPoints();
-		// this->publishMap();
-		this->publishInflatedMap();
-		// this->publish2DOccupancyGrid();
-	}
+    void occMap::startVisualization() {
+        // rclcpp::Rate rate(10);
+        // while (rclcpp::ok()) {
+        //     this->publishProjPoints();
+        //     this->publishMap();
+        //     rate.sleep();
+        // }
+    }
 
-	void occMap::projPointsVisCB(const ros::TimerEvent& ){
-		this->publishProjPoints();
-	}
-
-	void occMap::mapVisCB(const ros::TimerEvent& ){
-		this->publishMap();
-	}
-	void occMap::inflatedMapVisCB(const ros::TimerEvent& ){
-		this->publishInflatedMap();
-	}
-
-	void occMap::map2DVisCB(const ros::TimerEvent& ){
-		this->publish2DOccupancyGrid();
-	}
-	
-	void occMap::startVisualization(){
-		ros::Rate r (10);
-		while (ros::ok()){
-			// pcl::PointCloud<pcl::PointXYZ> mapCloud, inflatedMapCloud, exploredMapCloud, depthCloud;
-			// this->getMapVisData(mapCloud, inflatedMapCloud, exploredMapCloud, depthCloud);
-			// sensor_msgs::PointCloud2 mapCloudMsg,inflatedMapCloudMsg, exploredMapCloudMsg, depthCloudMsg;
-			// pcl::toROSMsg(mapCloud, mapCloudMsg);
-			// pcl::toROSMsg(inflatedMapCloud, inflatedMapCloudMsg);
-			// pcl::toROSMsg(exploredMapCloud, exploredMapCloudMsg);
-			// pcl::toROSMsg(depthCloud, depthCloudMsg);
-
-			// this->inflatedMapVisPub_.publish(inflatedMapCloudMsg);
-			// this->mapVisPub_.publish(mapCloudMsg);
-			// this->mapExploredPub_.publish(exploredMapCloudMsg);
-			// this->depthCloudPub_.publish(depthCloudMsg);
-			this->publishProjPoints();
-			this->publishMap();
-			// this->publishInflatedMap();
-			this->publish2DOccupancyGrid();
-			r.sleep();	
-		}
-	}
-
-	void occMap::getMapVisData(pcl::PointCloud<pcl::PointXYZ>& mapCloud, pcl::PointCloud<pcl::PointXYZ>& inflatedMapCloud, pcl::PointCloud<pcl::PointXYZ>& exploredMapCloud, pcl::PointCloud<pcl::PointXYZ>& depthCloud){
-		pcl::PointXYZ pt;
+    void occMap::getMapVisData(pcl::PointCloud<pcl::PointXYZ>& mapCloud, pcl::PointCloud<pcl::PointXYZ>& inflatedMapCloud, pcl::PointCloud<pcl::PointXYZ>& exploredMapCloud, pcl::PointCloud<pcl::PointXYZ>& depthCloud) {
+        pcl::PointXYZ pt;
 		Eigen::Vector3d minRange, maxRange;
 		if (this->visGlobalMap_){
 			// minRange = this->mapSizeMin_;
@@ -1176,7 +990,8 @@ namespace mapManager{
 		exploredMapCloud.header.frame_id = "map";
 	}
 
-	void occMap::publishProjPoints(){
+
+    void occMap::publishProjPoints() {
 		pcl::PointXYZ pt;
 		pcl::PointCloud<pcl::PointXYZ> cloud;
 
@@ -1192,12 +1007,14 @@ namespace mapManager{
 		cloud.is_dense = true;
 		cloud.header.frame_id = "map";
 
-		sensor_msgs::PointCloud2 cloudMsg;
+		sensor_msgs::msg::PointCloud2 cloudMsg;
 		pcl::toROSMsg(cloud, cloudMsg);
-		this->depthCloudPub_.publish(cloudMsg);
+		this->depthCloudPub_->publish(cloudMsg);
+        cout<< "Published points" <<endl;
 	}
 
-	void occMap::publishMap(){
+
+    void occMap::publishMap() {
 		pcl::PointXYZ pt;
 		pcl::PointCloud<pcl::PointXYZ> cloud;
 		pcl::PointCloud<pcl::PointXYZ> exploredCloud;
@@ -1260,15 +1077,18 @@ namespace mapManager{
 		exploredCloud.is_dense = true;
 		exploredCloud.header.frame_id = "map";
 
-		sensor_msgs::PointCloud2 cloudMsg;
-		sensor_msgs::PointCloud2 exploredCloudMsg;
+		sensor_msgs::msg::PointCloud2 cloudMsg;
+		sensor_msgs::msg::PointCloud2 exploredCloudMsg;
 		pcl::toROSMsg(cloud, cloudMsg);
 		pcl::toROSMsg(exploredCloud, exploredCloudMsg);
-		this->mapVisPub_.publish(cloudMsg);
-		this->mapExploredPub_.publish(exploredCloudMsg);
+		this->mapVisPub_->publish(cloudMsg);
+		this->mapExploredPub_->publish(exploredCloudMsg);
+
+        cout<< "Published map" <<endl;
 	}
 
-	void occMap::publishInflatedMap(){
+
+    void occMap::publishInflatedMap() {
 		pcl::PointXYZ pt;
 		pcl::PointCloud<pcl::PointXYZ> cloud;
 
@@ -1314,13 +1134,15 @@ namespace mapManager{
 		cloud.is_dense = true;
 		cloud.header.frame_id = "map";
 
-		sensor_msgs::PointCloud2 cloudMsg;
+		sensor_msgs::msg::PointCloud2 cloudMsg;
 		pcl::toROSMsg(cloud, cloudMsg);
-		this->inflatedMapVisPub_.publish(cloudMsg);	
+		this->inflatedMapVisPub_->publish(cloudMsg);	
+        cout<< "Published inflated map" <<endl;
 	}
 
-	void occMap::publish2DOccupancyGrid(){
-		Eigen::Vector3d minRange, maxRange;
+
+    void occMap::publish2DOccupancyGrid() {
+       Eigen::Vector3d minRange, maxRange;
 		minRange = this->mapSizeMin_;
 		maxRange = this->mapSizeMax_;
 		minRange(2) = this->groundHeight_;
@@ -1330,7 +1152,7 @@ namespace mapManager{
 		this->boundIndex(minRangeIdx);
 		this->boundIndex(maxRangeIdx);
 
-		nav_msgs::OccupancyGrid mapMsg;
+		nav_msgs::msg::OccupancyGrid mapMsg;
 		for (int i=0; i<maxRangeIdx(0); ++i){
 			for (int j=0; j<maxRangeIdx(1); ++j){
 				mapMsg.data.push_back(0);
@@ -1355,12 +1177,14 @@ namespace mapManager{
 			}
 		}
 		mapMsg.header.frame_id = "map";
-		mapMsg.header.stamp = ros::Time::now();
 		mapMsg.info.resolution = this->mapRes_;
 		mapMsg.info.width = maxRangeIdx(0);
 		mapMsg.info.height = maxRangeIdx(1);
 		mapMsg.info.origin.position.x = minRange(0);
 		mapMsg.info.origin.position.y = minRange(1);
-		this->map2DPub_.publish(mapMsg);		
+		this->map2DPub_->publish(mapMsg);
+        cout<< "Published 2d map" <<endl;		
 	}
-}
+
+} // namespace mapManager
+

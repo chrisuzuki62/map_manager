@@ -1,14 +1,14 @@
-#include <ros/ros.h>
-#include <map_manager/occupancyMap.h>
+#include <rclcpp/rclcpp.hpp>
+#include "map_manager/occupancyMap.h"
 
-int main(int argc, char** argv){
-	ros::init(argc, argv, "occupancy_map_node");
-	ros::NodeHandle nh;
+int main(int argc, char** argv)
+{
+    rclcpp::init(argc, argv);
 
-	mapManager::occMap m;
-	m.initMap(nh);
+    auto node = mapManager::occMap::create();
 
-	ros::spin();
+    rclcpp::spin(node);
+    rclcpp::shutdown();
 
-	return 0;
+    return 0;
 }
