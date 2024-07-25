@@ -1,21 +1,22 @@
-# 3D Mapping Library For Autonomous Robots
+# ROS2 3D Mapping Library For Autonomous Robots
 This package is a library implementing various 3D mapping algorithms, such as occupancy voxel map, ESDF Map, [dynamic map](https://ieeexplore.ieee.org/abstract/document/10161194) (our mapping for dynamic environments), for autonomous mobile robots. 
 
-**Authors**: [Zhefan Xu](https://zhefanxu.com/) and Xiaoyang Zhan, Computational Engineering & Robotics Lab (CERLAB) at Carnegie Mellon University (CMU).
+** Original Authors**: [Zhefan Xu](https://zhefanxu.com/) and Xiaoyang Zhan, Computational Engineering & Robotics Lab (CERLAB) at Carnegie Mellon University (CMU).
+** Reimplemented Author**: [Christopher Suzuki] YKK AP Digital Labs
 
 If you find this work helpful, kindly show your support by giving us a free ⭐️. Your recognition is truly valued.
 
 This repo can be used as a standalone package and also comes as a module of our [autonomy framework](https://github.com/Zhefan-Xu/CERLAB-UAV-Autonomy).
 
 ## I. Installation Guide
-This repo has been tested on ROS Melodic with Ubuntu 18.04 and ROS Noetic with Ubuntu 20.04 and it depends on [onboard_detector](https://github.com/Zhefan-Xu/onboard_detector) which provides the dynamic obstacle detection and tracking for our [dynamic map](https://ieeexplore.ieee.org/abstract/document/10161194). 
+This repo has been tested on  ROS Noetic with Ubuntu 20.04.
 
 ```
-cd ~/catkin_ws/src
-git clone https://github.com/Zhefan-Xu/map_manager.git
+cd ~/ros2_ws/src
+git clone https://github.com/chrisuzuki62/map_manager.git
 
-cd ~/catkin_ws
-catkin_make
+cd ~/ros2_ws_ws
+colcon build
 ```
 
 If you have catkin_make issue with Eigen package, try the command below:
