@@ -368,7 +368,7 @@ namespace mapManager {
 		this->inflateTimer_ = this->create_wall_timer(std::chrono::milliseconds(50), std::bind(&occMap::inflateMapCB, this));
 
         this->visTimer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&occMap::visCB, this));
-		this->visWorker_ = std::thread(&occMap::startVisualization, this);
+		// this->visWorker_ = std::thread(&occMap::startVisualization, this);
 		// this->visWorker_.detach();
 	}
 
@@ -495,9 +495,9 @@ void occMap::updateOccupancyCB() {
 			return;
 		}
 		cout << "update occupancy map" << endl;
-		// ros::Time startTime, endTime;
+		rclcpp::Clock::SharedPtr clock = this->get_clock();
 		
-		// startTime = ros::Time::now();
+		rclcpp::Time startTime = clock->now();
 		if (this->sensorInputMode_ == 0){
 			// project 3D points from depth map
 			this->projectDepthImage();
@@ -518,9 +518,9 @@ void occMap::updateOccupancyCB() {
 		
 		// inflate map
 		// this->inflateLocalMap();
-		// endTime = ros::Time::now();
+		rclcpp::Time endTime = clock->now();
 		if (this->verbose_){
-			// cout << this->hint_ << ": Occupancy update time: " << (endTime - startTime).toSec() << " s." << endl;
+			cout << this->hint_ << ": Occupancy update time: " << (endTime - startTime).seconds() << " s." << endl;
 		}
 		this->occNeedUpdate_ = false;
 		this->mapNeedInflate_ = true;
@@ -615,6 +615,7 @@ void occMap::updateOccupancyCB() {
 	}
 
     void occMap::raycastUpdate() {
+		cout<< "point number: "<< this->projPointsNum_ <<endl;
         if (this->projPointsNum_ == 0){
 			return;
 		}
@@ -834,6 +835,9 @@ void occMap::updateOccupancyCB() {
 	}
 
     void occMap::inflateLocalMap() {
+		rclcpp::Clock::SharedPtr clock = this->get_clock();
+		rclcpp::Time startTime = clock->now();
+
 		int xmin = this->localBoundMin_(0);
 		int xmax = this->localBoundMax_(0);
 		int ymin = this->localBoundMin_(1);
@@ -849,6 +853,11 @@ void occMap::updateOccupancyCB() {
 					this->occupancyInflated_[this->indexToAddress(clearIndex)] = false;
 				}
 			}
+		}
+
+		rclcpp::Time interTime = clock->now();
+		if (this->verbose_){
+			cout << this->hint_ << ": Inflate Intermediate update time: " << (interTime - startTime).seconds() << " s." << endl;
 		}
 
 		int xInflateSize = ceil(this->robotSize_(0)/(2*this->mapRes_));
@@ -882,13 +891,17 @@ void occMap::updateOccupancyCB() {
 				}
 			}
 		}
+		rclcpp::Time endTime = clock->now();
+		if (this->verbose_){
+			cout << this->hint_ << ": Inflate update time: " << (endTime - startTime).seconds() << " s." << endl;
+		}
 	}
 
 
     void occMap::visCB() {
         // cout<< "Vis CB" <<endl;
-        this->publishProjPoints();
-        // this->publishMap();
+        // this->publishProjPoints();
+        this->publishMap();
         this->publishInflatedMap();
         this->publish2DOccupancyGrid();
     }

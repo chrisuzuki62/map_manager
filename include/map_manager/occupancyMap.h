@@ -26,10 +26,7 @@ using std::cout; using std::endl;
 namespace mapManager {
     class occMap : public rclcpp::Node, public std::enable_shared_from_this<occMap> {
     private:
-        void initMap();
-        void initPrebuiltMap();
-        void registerCallback();
-        void registerPub();
+
     protected:
         std::string ns_;
         std::string hint_;
@@ -156,6 +153,10 @@ namespace mapManager {
         occMap(); // empty constructor
         virtual ~occMap() = default;
         void initParam();
+        void initMap();
+        void initPrebuiltMap();
+        void registerCallback();
+        void registerPub();
 		// void initMap(const std::shared_ptr<rclcpp::Node>& node);
         void initialize();
 

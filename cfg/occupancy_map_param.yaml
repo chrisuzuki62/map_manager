@@ -11,7 +11,7 @@ occupancy_map_node:
     # odom_topic: /mavros/local_position/odom
 
     # robot size
-    robot_size: [0.8, 0.3, 0.5]
+    robot_size: [0.3, 0.3, 0.3]
 
     # Camera Parameters
     depth_intrinsics: [554.254691191187, 554.254691191187, 320.5, 240.5] # fx,  fy, cx, cy
@@ -28,7 +28,7 @@ occupancy_map_node:
                      0.0,  0.0,  0.0,  1.0]
 
     # Raycasting
-    raycast_max_length: 10.0
+    raycast_max_length: 5.0
     p_hit: 0.70
     p_miss: 0.35
     p_min: 0.12
@@ -36,18 +36,18 @@ occupancy_map_node:
     p_occ: 0.80
 
     # Map
-    map_resolution: 0.1
+    map_resolution: 0.2
     ground_height: -0.1 # m
     map_size: [40.0, 40.0, 3.0] # meter. in x y z direction (reserved size)
-    local_update_range: [10.0, 10.0, 10.0]
+    local_update_range: [5.0, 5.0, 5.0]
     local_bound_inflation: 3.0 # inflate local bound in meter
     clean_local_map: false
 
     # visualization
-    local_map_size: [20.0, 20.0, 6.0] # meter. in x y z direction (only for visualization)
+    local_map_size: [40.0, 40.0, 6.0] # meter. in x y z direction (only for visualization)
     max_height_visualization: 2.5 # m
     visualize_global_map: true
-    verbose: false
+    verbose: true
 
     prebuilt_map_directory: "No"
     # prebuilt_map_directory: "/home/cerlab/map/static_map.pcd"
